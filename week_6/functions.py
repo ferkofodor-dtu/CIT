@@ -1,6 +1,15 @@
 import pycountry_convert as pc
 import pandas as pd
 import matplotlib.pyplot as plt
+import geopandas as gpd
+import numpy as np
+import seaborn as sns
+
+
+world_gdf = gpd.read_file(
+    "https://d2ad6b4ur7yvpq.cloudfront.net/naturalearth-3.3.0/ne_110m_admin_0_countries.geojson"
+)[['admin', 'adm0_a3', 'geometry']]
+
 
 AGGREGATE_ENTITIES = {
     "World",
@@ -100,7 +109,7 @@ def add_continent_column(df, code_col="country_code"):
     # add manual mappings for missing codes
     manual_mappings = {
         'TLS': 'Asia',  # East Timor
-        'XK': 'Europe',  # Kosovo
+        'KOS': 'Europe',  # Kosovo
         'SXM': 'North America',  # Sint Maarten (Dutch part)
         'VAT': 'Europe',  # Vatican
         'ESH': 'Africa'  # Western Sahara
@@ -116,6 +125,157 @@ def load_clean_data(path):
     df = add_continent_column(df)
     return df
 
+
+def plot_time_series(
+    df,
+    value_col,
+    agg_func="sum",
+    year_col="year",
+    hue_col=None,
+    relative=False,
+    title=None,
+    ylabel=None,
+    ax=None,
+    **kwargs
+):
+    """
+    Plot a time series either globally or grouped by a hue column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe.
+    value_col : str
+        Column containing the value to aggregate and plot.
+    year_col : str, default="year"
+        Column containing the year/time variable.
+    hue_col : str or None, default=None
+        Optional grouping column (e.g. continent). If None, plot the global aggregate.
+    relative : bool, default=False
+        If True, plot year-over-year percentage growth instead of absolute values.
+    title : str or None, default=None
+        Plot title.
+    ylabel : str or None, default=None
+        Label for the y-axis.
+
+    Returns
+    -------
+    pd.DataFrame
+        Aggregated dataframe used for plotting.
+    """
+    group_cols = [year_col] if hue_col is None else [year_col, hue_col]
+
+    plot_df = (
+        df.groupby(group_cols, dropna=False, as_index=False)[value_col]
+        .agg(agg_func)
+        .sort_values(group_cols)
+    )
+
+    y_col = value_col
+
+    if relative:
+        if hue_col is None:
+            plot_df["growth_rate"] = plot_df[value_col].pct_change() * 100
+        else:
+            plot_df["growth_rate"] = (
+                plot_df.groupby(hue_col)[value_col]
+                .pct_change() * 100
+            )
+        y_col = "growth_rate"
+
+    if ax is None:
+        plt.figure(figsize=kwargs.get("figsize", (10, 5)))
+        ax = plt.gca()
+
+    sns.lineplot(data=plot_df, x=year_col, y=y_col, hue=hue_col, ax=ax, **kwargs)
+
+    ax.set_title(title)
+    ax.set_xlabel(year_col.replace("_", " ").title())
+    ax.set_ylabel(ylabel)
+    ax.grid(axis='both', linestyle='--', alpha=0.5, color='gray', zorder=-1)
+    
+    return plot_df, ax
+
+
+def plot_world_map(
+    df,
+    value_col,
+    year,
+    country_code_col="country_code",
+    year_col="year",
+    log_scale=False,
+    interactive=False,
+    cmap="viridis",
+    title=None,
+    ax=None
+):
+    """
+    Plot a world map for a given year.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe
+    value_col : str
+        Column to visualize
+    year : int
+        Year to filter
+    country_code_col : str
+        Column with ISO-3 country codes
+    year_col : str
+        Year column
+    log_scale : bool
+        Whether to apply log transformation
+    interactive : bool
+        If True, use .explore(), else .plot()
+    cmap : str
+        Colormap
+    title : str or None
+        Plot title
+    """
+
+    # Filter year
+    df_year = df[df[year_col] == year]
+
+    # Merge with world map
+    merged = world_gdf.merge(
+        df_year,
+        left_on="adm0_a3",
+        right_on=country_code_col,
+        how="left"
+    )
+
+    # Handle log scale
+    plot_col = value_col
+    if log_scale:
+        plot_col = f"log_{value_col}"
+        merged[plot_col] = np.log10(merged[value_col])
+
+    # Title
+    if title is None:
+        title = f"{value_col.replace('_', ' ').title()} ({year})"
+        if log_scale:
+            title = f"Log {title}"
+
+    # Plot
+    if interactive:
+        return merged.explore(
+            column=plot_col,
+            cmap=cmap
+        )
+    else:
+        merged.plot(
+            column=plot_col,
+            cmap=cmap,
+            legend=True,
+            figsize=(12, 6),
+            missing_kwds={"color": "lightgrey"}
+        )
+
+        if ax is None:
+            ax = plt.gca()
+        ax.set_title(title)
+        ax.axis("off")
 
 
 def plot_slope_chart(
